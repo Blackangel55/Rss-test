@@ -53,8 +53,8 @@ logger = logging.getLogger(__name__)
 STATE_FILE = Path(__file__).with_name("seen.json")
 MAX_SEEN_PER_FEED = 200
 
-# Unique per process start, so repeated restart notices can be told apart
-# (same id restarting = crash loop, many ids = many deploys/instances).
+# Unique per process start, so overlapping instances can be told apart
+# in the logs (same id restarting = crash loop, many ids = many deploys).
 INSTANCE_ID = secrets.token_hex(4)
 
 
