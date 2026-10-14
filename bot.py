@@ -209,20 +209,45 @@ BROWSER_UA = (
 )
 
 
+def download(url: str):
+    """
+    GET a URL with retries on transient failures (blocking).
+    Returns (status, data) on success, (None, None) on failure.
+    Retries 5xx responses and connection errors; 4xx fails immediately.
+    """
+    for attempt in range(1, 4):
+        req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError as e:
+            if 500 <= e.code < 600 and attempt < 3:
+                wait = 5 * attempt
+                logger.warning("Feed %s: HTTP %s (attempt %d/3), retrying in %ds...",
+                               url, e.code, attempt, wait)
+                time.sleep(wait)
+                continue
+            logger.warning("Feed %s returned HTTP %s.", url, e.code)
+            return None, None
+        except Exception:
+            if attempt < 3:
+                wait = 5 * attempt
+                logger.warning("Feed %s: download failed (attempt %d/3), retrying in %ds...",
+                               url, attempt, wait)
+                time.sleep(wait)
+                continue
+            logger.exception("Error downloading feed %s.", url)
+            return None, None
+    return None, None  # unreachable, safety net
+
+
 def fetch_feed(url: str) -> list:
     """
     Download and parse one feed (blocking) - runs in the RSS thread.
     Never raises: returns [] on any failure.
     """
-    req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            status, data = resp.status, resp.read()
-    except urllib.error.HTTPError as e:
-        logger.warning("Feed %s returned HTTP %s.", url, e.code)
-        return []
-    except Exception:
-        logger.exception("Error downloading feed %s.", url)
+    status, data = download(url)
+    if data is None:
         return []
 
     parsed = feedparser.parse(data)
