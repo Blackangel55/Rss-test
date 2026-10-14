@@ -127,6 +127,7 @@ async def start_handler(client: Client, message):
     await message.reply_text(
         "Hi! I'm alive and running.\n\n"
         "I watch RSS feeds and post new items to the channel.\n"
+        "Full Credits goes to this guy👉 @GUARDIANff\n"
         "Try /help to see what I can do."
     )
 
