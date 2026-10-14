@@ -13,7 +13,7 @@ Configuration (environment variables, see .env.example):
     CHANNEL_ID             - @channelusername or numeric id like -1001234567890
                              (the bot must be an admin of the channel)
     ADMIN_ID               - your numeric Telegram user ID (from @userinfobot);
-                             restart notices go to your PM instead of the channel
+                             used by the Credits button in /start
     CHECK_INTERVAL_MINUTES - how often to check the feeds (default: 15)
     PORT                   - port for the health-check server (default: 8000).
                              Koyeb sets this automatically for web services.
@@ -412,24 +412,8 @@ if __name__ == "__main__":
     start_health_server(config["port"])
     app.start()
     logger.info("Instance %s started.", INSTANCE_ID)
-    if config["admin_id"]:
-        # Exactly one notice per process start. Telegram's Bot API does not
-        # allow bots to read chat history (BOT_METHOD_INVALID), so there is
-        # no way to check whether a sibling instance already sent one during
-        # a rolling deploy - each fresh instance sends its own notice.
-        try:
-            app.send_message(
-                config["admin_id"],
-                f"🤖 Bot restarted — RSS watcher is running. [{INSTANCE_ID}]",
-            )
-            logger.info("Sent restart notification to admin.")
-        except Exception:
-            logger.exception("Failed to send restart notification.")
-    else:
-        logger.warning(
-            "ADMIN_ID not set — skipping restart notification. "
-            "Set it to your numeric Telegram user ID to get restart notices in PM."
-        )
+    # Restart notices are disabled (Sreehari's choice): no DM is sent on
+    # startup. ADMIN_ID is still used by the Credits button in /start.
     threading.Thread(
         target=rss_poller_loop,
         args=(config["feed_urls"], config["channel_id"], config["interval"]),
