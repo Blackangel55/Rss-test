@@ -5,6 +5,9 @@ Features:
     - /start, /help and echo handlers
     - RSS watcher: polls RSS_FEED_URL every CHECK_INTERVAL_MINUTES and
       posts new items to CHANNEL_ID.
+    - Startup notice: DMs ADMIN_ID after the bot has stayed up for
+      STARTUP_NOTICE_DELAY seconds (skipped if the instance is shutting down,
+      so the old instance during a Koyeb rolling deploy stays quiet).
 
 Configuration (environment variables, see .env.example):
     API_ID, API_HASH       - from https://my.telegram.org
@@ -13,8 +16,13 @@ Configuration (environment variables, see .env.example):
     CHANNEL_ID             - @channelusername or numeric id like -1001234567890
                              (the bot must be an admin of the channel)
     ADMIN_ID               - your numeric Telegram user ID (from @userinfobot);
-                             used by the Credits button in /start
+                             used by the Credits button and startup notice.
+                             You must press /start in the bot once, or
+                             Telegram will not let it DM you.
     CHECK_INTERVAL_MINUTES - how often to check the feeds (default: 15)
+    STARTUP_NOTICE_DELAY   - seconds to wait before DMing the admin (default: 90).
+                             Keep it longer than the Koyeb overlap gap
+                             between old and new deployment.
     PORT                   - port for the health-check server (default: 8000).
                              Koyeb sets this automatically for web services.
 
@@ -56,6 +64,10 @@ MAX_SEEN_PER_FEED = 200
 # Unique per process start, so overlapping instances can be told apart
 # in the logs (same id restarting = crash loop, many ids = many deploys).
 INSTANCE_ID = secrets.token_hex(4)
+
+# Set when SIGINT/SIGTERM arrives. Background threads check it so an old
+# instance (during a Koyeb rolling deploy) stops posting and stays quiet.
+SHUTTING_DOWN = threading.Event()
 
 
 # ---------------------------------------------------------------- config ---
@@ -108,6 +120,14 @@ def get_config() -> dict:
         sys.exit("CHECK_INTERVAL_MINUTES must be a positive number of minutes.")
 
     try:
+        notice_delay = int(os.environ.get("STARTUP_NOTICE_DELAY", "90"))
+        if notice_delay < 0:
+            raise ValueError
+    except ValueError:
+        logger.warning("STARTUP_NOTICE_DELAY is not a valid number, falling back to 90.")
+        notice_delay = 90
+
+    try:
         port = int(os.environ.get("PORT", "8000"))
     except ValueError:
         logger.warning("PORT is not a number, falling back to 8000.")
@@ -121,6 +141,7 @@ def get_config() -> dict:
         "channel_id": parse_channel_id(channel_id_raw),
         "admin_id": admin_id,
         "interval": interval,
+        "notice_delay": notice_delay,
         "port": port,
     }
 
@@ -162,10 +183,16 @@ async def help_handler(client: Client, message):
 @app.on_message(filters.private & ~filters.command(["start", "help"]))
 async def echo_handler(client: Client, message):
     """Echo private text messages back to the sender."""
-    if message.text:
-        await message.reply_text(f"You said: {message.text}")
-    else:
+    if not message.text:
         await message.reply_text("I only echo text messages for now.")
+        return
+
+    # Never echo our own notices (or earlier echoes) back, or they pile up
+    # as "You said: You said: ...".
+    if message.text.startswith("You said:") or "Bot started" in message.text:
+        return
+
+    await message.reply_text(f"You said: {message.text}")
 
 
 # ------------------------------------------------------------ rss watcher ---
@@ -309,6 +336,9 @@ def check_feeds(feed_urls: list, seen: dict) -> list:
     """
     new_items = []
     for url in feed_urls:
+        if SHUTTING_DOWN.is_set():
+            break
+
         entries = fetch_feed(url)
         if not entries:
             # Fetch failed (or the feed is genuinely empty): don't touch
@@ -338,11 +368,15 @@ def rss_poller_loop(feed_urls: list, channel_id, interval_minutes: int):
     """Background thread: poll feeds forever and post new items to the channel."""
     seen = load_seen()
 
-    while True:
+    while not SHUTTING_DOWN.is_set():
         try:
             new_items = check_feeds(feed_urls, seen)
             save_seen(seen)
             for entry in new_items:
+                # Old instance got SIGTERM: stop posting right away so the
+                # new instance does not double-post the same items.
+                if SHUTTING_DOWN.is_set():
+                    return
                 try:
                     app.send_message(
                         channel_id,
@@ -357,7 +391,43 @@ def rss_poller_loop(feed_urls: list, channel_id, interval_minutes: int):
                 time.sleep(1)  # gentle pacing to respect Telegram rate limits
         except Exception:
             logger.exception("RSS poller iteration failed")
-        time.sleep(interval_minutes * 60)
+
+        # Sleep, but wake up immediately if shutdown starts.
+        if SHUTTING_DOWN.wait(interval_minutes * 60):
+            return
+
+
+# ------------------------------------------------------- startup notice ---
+
+def notify_admin_started():
+    """
+    DM the admin that the bot started.
+
+    Called by a delayed timer, not at startup. If this instance is already
+    shutting down (old deployment during a Koyeb rolling deploy) or crashed
+    before the timer fired, nothing is sent. Only the surviving instance
+    notifies.
+    """
+    if SHUTTING_DOWN.is_set():
+        logger.info("Instance %s shutting down, skipping startup notice.", INSTANCE_ID)
+        return
+
+    admin_id = config.get("admin_id")
+    if not admin_id:
+        logger.info("ADMIN_ID not set, skipping startup notice.")
+        return
+
+    text = (
+        "✅ <b>Bot started</b>\n"
+        f"Instance: <code>{INSTANCE_ID}</code>\n"
+        f"Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC\n"
+        f"Feeds: {len(config['feed_urls'])} | Interval: {config['interval']} min"
+    )
+    try:
+        app.send_message(admin_id, text, parse_mode=enums.ParseMode.HTML)
+        logger.info("Startup notice sent to admin %s.", admin_id)
+    except Exception:
+        logger.exception("Could not DM admin %s (did they press /start?).", admin_id)
 
 
 # ------------------------------------------------------- health check ---
@@ -403,24 +473,7 @@ def start_health_server(port: int):
     logger.info("Health check server listening on 0.0.0.0:%d.", port)
     return server
 
-def notify_admin_started():
-    """DM the admin when the bot starts (restart, redeploy, crash-restart)."""
-    admin_id = config.get("admin_id")
-    if not admin_id:
-        logger.info("ADMIN_ID not set, skipping restart notice.")
-        return
-    text = (
-        "✅ <b>Bot started</b>\n"
-        f"Instance: <code>{INSTANCE_ID}</code>\n"
-        f"Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC\n"
-        f"Feeds: {len(config['feed_urls'])} | Interval: {config['interval']} min"
-    )
-    try:
-        app.send_message(admin_id, text, parse_mode=enums.ParseMode.HTML)
-        logger.info("Restart notice sent to admin %s.", admin_id)
-    except Exception:
-        logger.exception("Could not DM admin %s (did they press /start?).", admin_id)
-        
+
 # ------------------------------------------------------------------ main ---
 
 if __name__ == "__main__":
@@ -429,7 +482,13 @@ if __name__ == "__main__":
     start_health_server(config["port"])
     app.start()
     logger.info("Instance %s started.", INSTANCE_ID)
-    notify_admin_started()
+
+    # Delayed startup notice: only fires if this instance is still alive
+    # (and not shutting down) after the delay.
+    notice_timer = threading.Timer(config["notice_delay"], notify_admin_started)
+    notice_timer.daemon = True
+    notice_timer.start()
+
     threading.Thread(
         target=rss_poller_loop,
         args=(config["feed_urls"], config["channel_id"], config["interval"]),
@@ -440,6 +499,10 @@ if __name__ == "__main__":
         "Bot started. Watching %d feed(s), posting to %s every %d min.",
         len(config["feed_urls"]), config["channel_id"], config["interval"],
     )
+
     idle()  # block until SIGINT/SIGTERM (e.g. Ctrl+C or a Koyeb redeploy)
+
+    SHUTTING_DOWN.set()   # tell timer and poller threads to stop
+    notice_timer.cancel()
     app.stop()
     logger.info("Bot stopped.")
