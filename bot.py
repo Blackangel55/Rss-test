@@ -28,6 +28,8 @@ import re
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import feedparser
@@ -197,6 +199,43 @@ def format_entry(entry) -> str:
     return "\n".join(lines)
 
 
+# Some sites (e.g. Nyaa behind Cloudflare) block feedparser's default
+# User-Agent or datacenter IPs with an HTML challenge page instead of XML,
+# so we fetch with a browser UA and log what we actually received.
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
+)
+
+
+def fetch_feed(url: str) -> list:
+    """
+    Download and parse one feed (blocking) - runs in the RSS thread.
+    Never raises: returns [] on any failure.
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            status, data = resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        logger.warning("Feed %s returned HTTP %s.", url, e.code)
+        return []
+    except Exception:
+        logger.exception("Error downloading feed %s.", url)
+        return []
+
+    parsed = feedparser.parse(data)
+    if parsed.bozo and not parsed.entries:
+        snippet = data[:200].decode("utf-8", "replace").replace("\n", " ")
+        logger.warning(
+            "Could not parse feed %s (HTTP %s): %s | body starts with: %.200s",
+            url, status, parsed.bozo_exception, snippet,
+        )
+        return []
+    return parsed.entries
+
+
 def check_feeds(feed_urls: list, seen: dict, first_run: bool) -> list:
     """
     Fetch every feed and return entries that have not been seen yet.
@@ -206,18 +245,11 @@ def check_feeds(feed_urls: list, seen: dict, first_run: bool) -> list:
     """
     new_items = []
     for url in feed_urls:
-        try:
-            parsed = feedparser.parse(url)
-        except Exception:
-            logger.exception("Error fetching feed %s", url)
-            continue
-        if parsed.bozo and not parsed.entries:
-            logger.warning("Could not parse feed %s: %s", url, parsed.bozo_exception)
-            continue
+        entries = fetch_feed(url)
 
         known = set(seen.get(url, []))
         fresh = []
-        for entry in parsed.entries:
+        for entry in entries:
             uid = entry_uid(entry)
             if uid and uid not in known:
                 fresh.append((uid, entry))
