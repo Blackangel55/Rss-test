@@ -292,7 +292,7 @@ def credits_markup():
     if not admin_id:
         return None
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("👨‍💻 Credits", url=f"tg://user?id={admin_id}")]]
+        [[InlineKeyboardButton("👨‍💻 Credits", url=f"https://t.me/GUARDIANff")]]
     )
 
 
