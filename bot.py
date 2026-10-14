@@ -138,7 +138,8 @@ async def start_handler(client: Client, message):
     await message.reply_text(
         "Hi! I'm alive and running.\n\n"
         "I watch RSS feeds and post new items to the channel.\n"
-        "Try /help to see what I can do."
+        "Try /help to see what I can do.",
+        reply_markup=credits_markup(),
     )
 
 
@@ -215,6 +216,16 @@ def download_markup(entry):
         return None
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("⬇ Download", url=link)]]
+    )
+
+
+def credits_markup():
+    """Inline 'Credits' button linking to the admin's profile (None if ADMIN_ID unset)."""
+    admin_id = config.get("admin_id")
+    if not admin_id:
+        return None
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("👨‍💻 Credits", url=f"tg://user?id={admin_id}")]]
     )
 
 
