@@ -37,6 +37,7 @@ from dotenv import load_dotenv
 
 # Kurigram is a drop-in Pyrogram fork, so the import name stays `pyrogram`.
 from pyrogram import Client, enums, filters, idle
+from pyrogram.types import LinkPreviewOptions
 
 load_dotenv()
 
@@ -261,18 +262,28 @@ def fetch_feed(url: str) -> list:
     return parsed.entries
 
 
-def check_feeds(feed_urls: list, seen: dict, first_run: bool) -> list:
+def check_feeds(feed_urls: list, seen: dict) -> list:
     """
     Fetch every feed and return entries that have not been seen yet.
 
-    On the very first run nothing is returned: current items are only
-    marked as seen so the channel is not flooded with old posts.
+    The first time a feed is *successfully* fetched, its current items are
+    only marked as seen so the channel is not flooded with old posts.
+    A failed fetch leaves that feed's state untouched, so recovering from
+    an outage (or a fresh deploy whose first checks fail, e.g. on Koyeb's
+    ephemeral filesystem) still seeds quietly instead of posting the
+    whole backlog at once.
     """
     new_items = []
     for url in feed_urls:
         entries = fetch_feed(url)
+        if not entries:
+            # Fetch failed (or the feed is genuinely empty): don't touch
+            # `seen` for this feed, so the next successful fetch seeds quietly.
+            logger.info("Checked %s: no entries fetched; will retry next cycle.", url)
+            continue
 
-        known = set(seen.get(url, []))
+        known = set(seen.get(url, []) or [])
+        first_success = not seen.get(url)
         fresh = []
         for entry in entries:
             uid = entry_uid(entry)
@@ -282,23 +293,20 @@ def check_feeds(feed_urls: list, seen: dict, first_run: bool) -> list:
         # Oldest first, so the channel reads in chronological order.
         for uid, entry in reversed(fresh):
             known.add(uid)
-            if not first_run:
+            if not first_success:
                 new_items.append(entry)
         seen[url] = sorted(known)[-MAX_SEEN_PER_FEED:]
-        logger.info("Checked %s: %d new item(s).", url, 0 if first_run else len(fresh))
+        logger.info("Checked %s: %d new item(s).", url, 0 if first_success else len(fresh))
     return new_items
 
 
 def rss_poller_loop(feed_urls: list, channel_id, interval_minutes: int):
     """Background thread: poll feeds forever and post new items to the channel."""
     seen = load_seen()
-    first_run = not STATE_FILE.exists()
-    if first_run:
-        logger.info("First run: marking current feed items as seen (nothing will be posted).")
 
     while True:
         try:
-            new_items = check_feeds(feed_urls, seen, first_run)
+            new_items = check_feeds(feed_urls, seen)
             save_seen(seen)
             for entry in new_items:
                 try:
@@ -306,13 +314,12 @@ def rss_poller_loop(feed_urls: list, channel_id, interval_minutes: int):
                         channel_id,
                         format_entry(entry),
                         parse_mode=enums.ParseMode.HTML,
-                        disable_web_page_preview=False,
+                        link_preview_options=LinkPreviewOptions(is_disabled=False),
                     )
                     logger.info("Posted to channel: %s", entry.get("title"))
                 except Exception:
                     logger.exception("Failed to post entry: %s", entry.get("title"))
                 time.sleep(1)  # gentle pacing to respect Telegram rate limits
-            first_run = False
         except Exception:
             logger.exception("RSS poller iteration failed")
         time.sleep(interval_minutes * 60)
