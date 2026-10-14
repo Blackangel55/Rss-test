@@ -37,7 +37,7 @@ from dotenv import load_dotenv
 
 # Kurigram is a drop-in Pyrogram fork, so the import name stays `pyrogram`.
 from pyrogram import Client, enums, filters, idle
-from pyrogram.types import LinkPreviewOptions
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 
 load_dotenv()
 
@@ -127,7 +127,6 @@ async def start_handler(client: Client, message):
     await message.reply_text(
         "Hi! I'm alive and running.\n\n"
         "I watch RSS feeds and post new items to the channel.\n"
-        "Full Credits goes to this guy👉 @GUARDIANff\n"
         "Try /help to see what I can do."
     )
 
@@ -185,7 +184,6 @@ def strip_html(text: str) -> str:
 def format_entry(entry) -> str:
     """Format a feed entry as an HTML message for the channel."""
     title = html.escape(entry.get("title", "Untitled"))
-    link = entry.get("link", "")
     published = html.escape(entry.get("published", ""))
     summary = strip_html(entry.get("summary", "") or entry.get("description", ""))
     if len(summary) > 300:
@@ -196,9 +194,17 @@ def format_entry(entry) -> str:
         lines.append(f"<i>{published}</i>")
     if summary:
         lines.append(f"\n{html.escape(summary)}")
-    if link:
-        lines.append(f'\n<a href="{html.escape(link, quote=True)}">Read more</a>')
     return "\n".join(lines)
+
+
+def download_markup(entry):
+    """Inline 'Download' button pointing at the entry's link (None if no link)."""
+    link = (entry.get("link") or "").strip()
+    if not link:
+        return None
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬇ Download", url=link)]]
+    )
 
 
 # Some sites (e.g. Nyaa behind Cloudflare) block feedparser's default
@@ -316,6 +322,7 @@ def rss_poller_loop(feed_urls: list, channel_id, interval_minutes: int):
                         format_entry(entry),
                         parse_mode=enums.ParseMode.HTML,
                         link_preview_options=LinkPreviewOptions(is_disabled=False),
+                        reply_markup=download_markup(entry),
                     )
                     logger.info("Posted to channel: %s", entry.get("title"))
                 except Exception:
@@ -377,6 +384,14 @@ if __name__ == "__main__":
     # even while Telegram is still connecting.
     start_health_server(config["port"])
     app.start()
+    try:
+        app.send_message(
+            config["channel_id"],
+            "🤖 Bot restarted — RSS watcher is running.",
+        )
+        logger.info("Sent restart notification to the channel.")
+    except Exception:
+        logger.exception("Failed to send restart notification.")
     threading.Thread(
         target=rss_poller_loop,
         args=(config["feed_urls"], config["channel_id"], config["interval"]),
