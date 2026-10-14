@@ -48,6 +48,7 @@ from dotenv import load_dotenv
 
 # Kurigram is a drop-in Pyrogram fork, so the import name stays `pyrogram`.
 from pyrogram import Client, enums, filters, idle
+from pyrogram.errors import FloodWait
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 
 load_dotenv()
@@ -292,7 +293,7 @@ def credits_markup():
     if not admin_id:
         return None
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("👨‍💻 Credits", url=f"https://t.me/GUARDIANff")]]
+        [[InlineKeyboardButton("👨‍💻 Credits", url=f"tg://user?id={admin_id}")]]
     )
 
 
@@ -399,6 +400,42 @@ def check_feeds(feed_urls: list, seen: dict) -> list:
     return new_items
 
 
+POST_DELAY_SECONDS = 3   # Telegram allows ~20 msgs/min per chat; 3s stays under it
+MAX_POST_RETRIES = 5
+
+
+def post_entry(entry, channel_id) -> bool:
+    """
+    Post one entry to the channel. On FloodWait, sleep the time Telegram
+    asks for and retry the same entry. Returns True if posted.
+    """
+    for attempt in range(1, MAX_POST_RETRIES + 1):
+        try:
+            app.send_message(
+                channel_id,
+                format_entry(entry),
+                parse_mode=enums.ParseMode.HTML,
+                link_preview_options=LinkPreviewOptions(is_disabled=False),
+                reply_markup=download_markup(entry),
+            )
+            logger.info("Posted to channel: %s", entry.get("title"))
+            return True
+        except FloodWait as e:
+            wait = int(getattr(e, "value", None) or getattr(e, "x", None) or 15) + 1
+            logger.warning(
+                "FloodWait: Telegram asks to wait %ds (attempt %d/%d). Sleeping.",
+                wait, attempt, MAX_POST_RETRIES,
+            )
+            if SHUTTING_DOWN.wait(wait):  # wake early if shutting down
+                return False
+        except Exception:
+            logger.exception("Failed to post entry: %s", entry.get("title"))
+            return False
+    logger.error("Gave up posting after %d FloodWaits: %s",
+                 MAX_POST_RETRIES, entry.get("title"))
+    return False
+
+
 def rss_poller_loop(feed_urls: list, channel_id, interval_minutes: int):
     """Background thread: poll feeds forever and post new items to the channel."""
     seen = load_seen()
@@ -412,18 +449,10 @@ def rss_poller_loop(feed_urls: list, channel_id, interval_minutes: int):
                 # new instance does not double-post the same items.
                 if SHUTTING_DOWN.is_set():
                     return
-                try:
-                    app.send_message(
-                        channel_id,
-                        format_entry(entry),
-                        parse_mode=enums.ParseMode.HTML,
-                        link_preview_options=LinkPreviewOptions(is_disabled=False),
-                        reply_markup=download_markup(entry),
-                    )
-                    logger.info("Posted to channel: %s", entry.get("title"))
-                except Exception:
-                    logger.exception("Failed to post entry: %s", entry.get("title"))
-                time.sleep(1)  # gentle pacing to respect Telegram rate limits
+                post_entry(entry, channel_id)
+                # Gentle pacing to stay under Telegram rate limits.
+                if SHUTTING_DOWN.wait(POST_DELAY_SECONDS):
+                    return
         except Exception:
             logger.exception("RSS poller iteration failed")
 
