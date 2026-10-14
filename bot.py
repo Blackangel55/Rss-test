@@ -12,6 +12,8 @@ Configuration (environment variables, see .env.example):
     RSS_FEED_URL           - one or more RSS/Atom feed URLs, comma-separated
     CHANNEL_ID             - @channelusername or numeric id like -1001234567890
                              (the bot must be an admin of the channel)
+    ADMIN_ID               - your numeric Telegram user ID (from @userinfobot);
+                             restart notices go to your PM instead of the channel
     CHECK_INTERVAL_MINUTES - how often to check the feeds (default: 15)
     PORT                   - port for the health-check server (default: 8000).
                              Koyeb sets this automatically for web services.
@@ -85,6 +87,14 @@ def get_config() -> dict:
     if not channel_id_raw:
         sys.exit("CHANNEL_ID is missing. Copy .env.example to .env and fill it in.")
 
+    admin_id_raw = os.environ.get("ADMIN_ID", "").strip()
+    admin_id = None
+    if admin_id_raw:
+        try:
+            admin_id = int(admin_id_raw)
+        except ValueError:
+            sys.exit("ADMIN_ID must be your numeric Telegram user ID (e.g. 123456789).")
+
     try:
         interval = int(os.environ.get("CHECK_INTERVAL_MINUTES", "15"))
         if interval < 1:
@@ -104,6 +114,7 @@ def get_config() -> dict:
         "bot_token": bot_token,
         "feed_urls": feed_urls,
         "channel_id": parse_channel_id(channel_id_raw),
+        "admin_id": admin_id,
         "interval": interval,
         "port": port,
     }
@@ -384,14 +395,20 @@ if __name__ == "__main__":
     # even while Telegram is still connecting.
     start_health_server(config["port"])
     app.start()
-    try:
-        app.send_message(
-            config["channel_id"],
-            "🤖 Bot restarted — RSS watcher is running.",
+    if config["admin_id"]:
+        try:
+            app.send_message(
+                config["admin_id"],
+                "🤖 Bot restarted — RSS watcher is running.",
+            )
+            logger.info("Sent restart notification to admin.")
+        except Exception:
+            logger.exception("Failed to send restart notification.")
+    else:
+        logger.warning(
+            "ADMIN_ID not set — skipping restart notification. "
+            "Set it to your numeric Telegram user ID to get restart notices in PM."
         )
-        logger.info("Sent restart notification to the channel.")
-    except Exception:
-        logger.exception("Failed to send restart notification.")
     threading.Thread(
         target=rss_poller_loop,
         args=(config["feed_urls"], config["channel_id"], config["interval"]),
