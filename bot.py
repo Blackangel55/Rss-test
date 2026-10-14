@@ -65,6 +65,9 @@ MAX_SEEN_PER_FEED = 200
 # in the logs (same id restarting = crash loop, many ids = many deploys).
 INSTANCE_ID = secrets.token_hex(4)
 
+# Monotonic clock for uptime: not affected by system clock changes.
+START_TIME = time.monotonic()
+
 # Set when SIGINT/SIGTERM arrives. Background threads check it so an old
 # instance (during a Koyeb rolling deploy) stops posting and stays quiet.
 SHUTTING_DOWN = threading.Event()
@@ -174,13 +177,45 @@ async def help_handler(client: Client, message):
     """Show the available commands."""
     await message.reply_text(
         "Here's what I understand:\n"
-        "/start - say hello\n"
-        "/help  - show this message\n"
+        "/start  - say hello\n"
+        "/help   - show this message\n"
+        "/uptime - show how long I have been running\n"
         "Anything else - I'll echo it back"
     )
 
 
-@app.on_message(filters.private & ~filters.command(["start", "help"]))
+def format_duration(seconds: float) -> str:
+    """Turn seconds into a short string like '2d 3h 4m 5s'."""
+    seconds = int(seconds)
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if days or hours:
+        parts.append(f"{hours}h")
+    if days or hours or minutes:
+        parts.append(f"{minutes}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
+@app.on_message(filters.command("uptime"))
+async def uptime_handler(client: Client, message):
+    """Show how long this instance has been running."""
+    elapsed = time.monotonic() - START_TIME
+    started_at = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time() - elapsed))
+    await message.reply_text(
+        "⏱ <b>Uptime</b>\n"
+        f"Running for: <code>{format_duration(elapsed)}</code>\n"
+        f"Started: {started_at} UTC\n"
+        f"Instance: <code>{INSTANCE_ID}</code>",
+        parse_mode=enums.ParseMode.HTML,
+    )
+
+
+@app.on_message(filters.private & ~filters.command(["start", "help", "uptime"]))
 async def echo_handler(client: Client, message):
     """Echo private text messages back to the sender."""
     if not message.text:
