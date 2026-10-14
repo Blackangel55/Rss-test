@@ -403,7 +403,24 @@ def start_health_server(port: int):
     logger.info("Health check server listening on 0.0.0.0:%d.", port)
     return server
 
-
+def notify_admin_started():
+    """DM the admin when the bot starts (restart, redeploy, crash-restart)."""
+    admin_id = config.get("admin_id")
+    if not admin_id:
+        logger.info("ADMIN_ID not set, skipping restart notice.")
+        return
+    text = (
+        "✅ <b>Bot started</b>\n"
+        f"Instance: <code>{INSTANCE_ID}</code>\n"
+        f"Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC\n"
+        f"Feeds: {len(config['feed_urls'])} | Interval: {config['interval']} min"
+    )
+    try:
+        app.send_message(admin_id, text, parse_mode=enums.ParseMode.HTML)
+        logger.info("Restart notice sent to admin %s.", admin_id)
+    except Exception:
+        logger.exception("Could not DM admin %s (did they press /start?).", admin_id)
+        
 # ------------------------------------------------------------------ main ---
 
 if __name__ == "__main__":
@@ -412,8 +429,7 @@ if __name__ == "__main__":
     start_health_server(config["port"])
     app.start()
     logger.info("Instance %s started.", INSTANCE_ID)
-    # Restart notices are disabled (Sreehari's choice): no DM is sent on
-    # startup. ADMIN_ID is still used by the Credits button in /start.
+    notify_admin_started()
     threading.Thread(
         target=rss_poller_loop,
         args=(config["feed_urls"], config["channel_id"], config["interval"]),
