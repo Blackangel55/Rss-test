@@ -33,7 +33,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 
 import feedparser
@@ -57,37 +56,6 @@ MAX_SEEN_PER_FEED = 200
 # Unique per process start, so repeated restart notices can be told apart
 # (same id restarting = crash loop, many ids = many deploys/instances).
 INSTANCE_ID = secrets.token_hex(4)
-
-# Restart-notice dedup: if a notice was already sent to the admin within
-# this window (e.g. by a sibling instance during a Koyeb rolling deploy),
-# this instance stays quiet instead of spamming the DM.
-RESTART_NOTICE_PREFIX = "🤖 Bot restarted"
-RESTART_DEDUP_MINUTES = 10
-
-
-def restart_notice_recent(app, admin_id) -> bool:
-    """
-    True if this bot already sent a restart notice to the admin within
-    RESTART_DEDUP_MINUTES. Chat history comes back newest-first, so the
-    first restart notice found decides it. Never raises: on any error we
-    return False (fail open - one extra notice beats a missed restart).
-    """
-    try:
-        now = datetime.now(timezone.utc)
-        for msg in app.get_chat_history(admin_id, limit=50):
-            if not (msg.text or "").startswith(RESTART_NOTICE_PREFIX):
-                continue
-            msg_date = msg.date
-            if msg_date is not None:
-                if msg_date.tzinfo is None:
-                    msg_date = msg_date.replace(tzinfo=timezone.utc)
-                if (now - msg_date).total_seconds() < RESTART_DEDUP_MINUTES * 60:
-                    return True
-            return False
-        return False
-    except Exception:
-        logger.exception("Could not check for recent restart notices.")
-        return False
 
 
 # ---------------------------------------------------------------- config ---
@@ -445,18 +413,16 @@ if __name__ == "__main__":
     app.start()
     logger.info("Instance %s started.", INSTANCE_ID)
     if config["admin_id"]:
+        # Exactly one notice per process start. Telegram's Bot API does not
+        # allow bots to read chat history (BOT_METHOD_INVALID), so there is
+        # no way to check whether a sibling instance already sent one during
+        # a rolling deploy - each fresh instance sends its own notice.
         try:
-            if restart_notice_recent(app, config["admin_id"]):
-                logger.info(
-                    "A restart notice was already sent within the last %d min; skipping.",
-                    RESTART_DEDUP_MINUTES,
-                )
-            else:
-                app.send_message(
-                    config["admin_id"],
-                    f"🤖 Bot restarted — RSS watcher is running. [{INSTANCE_ID}]",
-                )
-                logger.info("Sent restart notification to admin.")
+            app.send_message(
+                config["admin_id"],
+                f"🤖 Bot restarted — RSS watcher is running. [{INSTANCE_ID}]",
+            )
+            logger.info("Sent restart notification to admin.")
         except Exception:
             logger.exception("Failed to send restart notification.")
     else:
