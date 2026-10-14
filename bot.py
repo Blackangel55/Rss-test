@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import sys
 import threading
 import time
@@ -51,6 +52,10 @@ logger = logging.getLogger(__name__)
 
 STATE_FILE = Path(__file__).with_name("seen.json")
 MAX_SEEN_PER_FEED = 200
+
+# Unique per process start, so repeated restart notices can be told apart
+# (same id restarting = crash loop, many ids = many deploys/instances).
+INSTANCE_ID = secrets.token_hex(4)
 
 
 # ---------------------------------------------------------------- config ---
@@ -406,11 +411,12 @@ if __name__ == "__main__":
     # even while Telegram is still connecting.
     start_health_server(config["port"])
     app.start()
+    logger.info("Instance %s started.", INSTANCE_ID)
     if config["admin_id"]:
         try:
             app.send_message(
                 config["admin_id"],
-                "🤖 Bot restarted — RSS watcher is running.",
+                f"🤖 Bot restarted — RSS watcher is running. [{INSTANCE_ID}]",
             )
             logger.info("Sent restart notification to admin.")
         except Exception:
