@@ -13,9 +13,11 @@ Configuration (environment variables, see .env.example):
     CHANNEL_ID             - @channelusername or numeric id like -1001234567890
                              (the bot must be an admin of the channel)
     CHECK_INTERVAL_MINUTES - how often to check the feeds (default: 15)
+    PORT                   - port for the health-check server (default: 8000).
+                             Koyeb sets this automatically for web services.
 
 Run locally:  docker compose up --build
-Deploy:       see DEPLOY_KOYEB.md (deploy as a Worker service)
+Deploy:       see DEPLOY_KOYEB.md (Worker service, or Web service with health check)
 """
 
 import html
@@ -87,6 +89,12 @@ def get_config() -> dict:
     except ValueError:
         sys.exit("CHECK_INTERVAL_MINUTES must be a positive number of minutes.")
 
+    try:
+        port = int(os.environ.get("PORT", "8000"))
+    except ValueError:
+        logger.warning("PORT is not a number, falling back to 8000.")
+        port = 8000
+
     return {
         "api_id": api_id,
         "api_hash": api_hash,
@@ -94,6 +102,7 @@ def get_config() -> dict:
         "feed_urls": feed_urls,
         "channel_id": parse_channel_id(channel_id_raw),
         "interval": interval,
+        "port": port,
     }
 
 
@@ -252,9 +261,56 @@ def rss_poller_loop(feed_urls: list, channel_id, interval_minutes: int):
         time.sleep(interval_minutes * 60)
 
 
+# ------------------------------------------------------- health check ---
+
+def start_health_server(port: int):
+    """
+    Minimal HTTP server so PaaS health checks (e.g. Koyeb web services)
+    see a healthy port. Runs in a daemon thread; the bot itself still
+    uses polling and needs no incoming connections.
+    """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "HealthBot/1.0"
+
+        def _respond(self, include_body: bool):
+            body = b'{"status":"ok","service":"telegram-bot"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if include_body:
+                self.wfile.write(body)
+
+        def _handle(self, include_body: bool):
+            if self.path in ("/", "/health", "/healthz"):
+                self._respond(include_body)
+            else:
+                self.send_error(404)
+
+        def do_GET(self):
+            self._handle(include_body=True)
+
+        def do_HEAD(self):
+            self._handle(include_body=False)
+
+        def log_message(self, *args):
+            logger.debug("health: %s", args[0] % args[1:])
+
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True, name="health-server")
+    thread.start()
+    logger.info("Health check server listening on 0.0.0.0:%d.", port)
+    return server
+
+
 # ------------------------------------------------------------------ main ---
 
 if __name__ == "__main__":
+    # Bind the health-check port first so the platform sees us as alive
+    # even while Telegram is still connecting.
+    start_health_server(config["port"])
     app.start()
     threading.Thread(
         target=rss_poller_loop,

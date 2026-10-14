@@ -1,7 +1,9 @@
 # Deploying this bot on Koyeb
 
-A Telegram polling bot has no website to serve, so on Koyeb it runs as a
-**Worker** service (background task, no public port needed).
+A Telegram polling bot has no website to serve. The cleanest fit is a
+**Worker** service (background task, no public port needed) — but if your
+plan only offers **Web** services, that works too: the bot now includes a
+tiny built-in health-check server, so Koyeb's port check passes.
 
 ## 1. Push the project to GitHub
 
@@ -22,8 +24,12 @@ git push -u origin main
 1. Go to the [Koyeb dashboard](https://app.koyeb.com) → **Create Service**.
 2. Choose **GitHub** as the source and select your repository (branch `main`).
 3. Builder: **Dockerfile** (Koyeb auto-detects the `Dockerfile` in the repo root).
-4. **Service type: Worker** — this is the important bit. A polling bot
-   doesn't listen on a port, and the Worker type is made for exactly this.
+4. **Service type:**
+   - **Worker** (preferred) — no port or health check needed.
+   - **Web** (if Worker isn't available on your plan) — keep the port at
+     `8000` (or whatever `PORT` Koyeb assigns). The bot answers Koyeb's
+     health check itself on `/`, `/health` and `/healthz`, so the
+     "TCP health check failed" error goes away. No extra configuration needed.
 5. Pick a region and an instance type that fits your plan.
 6. Add these **environment variables**:
    - `API_ID`
@@ -32,8 +38,10 @@ git push -u origin main
    - `RSS_FEED_URL`
    - `CHANNEL_ID`
    - `CHECK_INTERVAL_MINUTES`
+   - (`PORT` is set automatically by Koyeb for web services; you can omit it.)
 7. Deploy, then watch the **Logs** tab. You should see:
-   `Bot started. Watching 1 feed(s), posting to @mychannel every 15 min.`
+   `Health check server listening on 0.0.0.0:8000.`
+   followed by `Bot started. Watching 1 feed(s), posting to @mychannel every 15 min.`
 
 ## 3. Prepare the Telegram channel
 

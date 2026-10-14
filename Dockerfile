@@ -8,4 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY bot.py .
 
+# Health-check port (Koyeb web services probe this; the bot itself uses polling)
+EXPOSE 8000
+
 CMD ["python", "bot.py"]
