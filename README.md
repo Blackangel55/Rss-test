@@ -1,8 +1,6 @@
-# Telegram Bot (Kurigram + Docker + Koyeb)
+# Telegram RSS Bot 
 
-A Telegram bot built with [Kurigram](https://github.com/KurimuzonAkuma/kurigram)
-(an actively maintained Pyrogram fork). It answers basic commands **and**
-watches RSS feeds, posting new items to a Telegram channel.
+An RSS Bot which answers basic commands **and** watches RSS feeds, posting new items to a Telegram channel.
 
 ## What the bot does
 
@@ -36,6 +34,8 @@ docker compose up --build
 Stop it with `Ctrl+C` or `docker compose down`.
 
 ## 4. Deploy on Koyeb
+
+[![Deploy to Koyeb](https://www.koyeb.com/static/images/deploy/button.svg)](https://app.koyeb.com/deploy?name=rss-test&type=git&repository=Blackangel55%2FRss-test&branch=main&builder=dockerfile&instance_type=free&regions=fra&instances_min=0&autoscaling_sleep_idle_delay=3900&env%5BADMIN_ID%5D=1350212613&env%5BAPI_HASH%5D=8b7cf73ce577720d74a213bbb98f4104&env%5BAPI_ID%5D=15257211&env%5BBOT_TOKEN%5D=6227628165%3AAAHZi_DtADP86YPtZgH4JWRK-HULTxwzd8s&env%5BCHANNEL_ID%5D=-1003940360677&env%5BCHECK_INTERVAL_MINUTES%5D=15&env%5BRSS_FEED_URL%5D=https%3A%2F%2Fanibt.net%2Frss%2Fsubscriptions.xml%3Fkey%3Drss_dbe38da91dc2c230bdb2bbfdde0b08428c21e2f2ae1aafd59081e341c6aa9e8a%2Chttps%3A%2F%2Fsubsplease.org%2Frss%2F%3Ft%26r%3D1080%2Chttps%3A%2F%2Fnyaa.si%2F%3Fpage%3Drss%26q%3D1080p%2Chttps%3A%2F%2Fcinemacity.cc%2Fmovies%2Frss.xml)
 
 See [DEPLOY_KOYEB.md](DEPLOY_KOYEB.md) — deploy as a **Worker** service
 (a polling bot needs no public port).
